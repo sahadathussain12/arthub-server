@@ -19,6 +19,37 @@ async function connectToMongoDB() {
     const db=client.db("arthub")
     const artworksCollection = db.collection("artworks");
 
+    app.get("/api/artworks", async (req, res) => {
+  try {
+    const { artistId } = req.query;
+
+    if (!artistId) {
+      return res.status(400).send({
+        success: false,
+        message: "Artist ID is required",
+      });
+    }
+
+    const result = await artworksCollection
+      .find({ artistId })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.send({
+      success: true,
+      data: result,
+    });
+
+  } catch (error) {
+    console.error("Get Artworks Error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch artworks",
+    });
+  }
+});
+
     app.post("/api/artworks", async (req, res) => {
       try {
         // console.log("Artwork API Hit!");
