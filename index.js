@@ -9,7 +9,6 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Client
 const client = new MongoClient(process.env.MONGO_URI);
 
 async function connectToMongoDB() {
@@ -182,7 +181,6 @@ async function connectToMongoDB() {
       }
     });
 
-
     app.get("/api/sales", async (req, res) => {
       try {
         const artistId = req.query.artistId;
@@ -192,7 +190,9 @@ async function connectToMongoDB() {
             .send({ success: false, message: "Artist ID is required" });
         }
 
-       const sales = await ordersCollection.find({ artistId: artistId }).toArray();
+        const sales = await ordersCollection
+          .find({ artistId: artistId })
+          .toArray();
 
         res.send({ success: true, data: sales });
       } catch (error) {
@@ -200,6 +200,104 @@ async function connectToMongoDB() {
         res
           .status(500)
           .send({ success: false, message: "Failed to fetch sales history" });
+      }
+    });
+
+    app.get("/api/orders", async (req, res) => {
+      try {
+        const userId = req.query.userId;
+        if (!userId) {
+          return res
+            .status(400)
+            .send({ success: false, message: "User ID is required" });
+        }
+
+        // ইউজারের আইডি দিয়ে অর্ডারগুলো খোঁজা (নতুন অর্ডারগুলো আগে দেখাবে)
+        const orders = await ordersCollection
+          .find({ userId: userId })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send({ success: true, data: orders });
+      } catch (error) {
+        console.error("Fetch Orders Error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch purchase history",
+        });
+      }
+    });
+
+    app.get("/api/user/bought-artworks", async (req, res) => {
+      try {
+        const userId = req.query.userId;
+        if (!userId) {
+          return res
+            .status(400)
+            .send({ success: false, message: "User ID is required" });
+        }
+
+        const orders = await ordersCollection
+          .find({ userId: userId })
+          .toArray();
+
+        if (orders.length === 0) {
+          return res.send({ success: true, data: [] });
+        }
+        const artworkIds = orders.map((order) => {
+          const id = order.artworkId || order.artId;
+          return ObjectId.isValid(id) ? new ObjectId(id) : id;
+        });
+
+        const boughtArtworks = await artworksCollection
+          .find({ _id: { $in: artworkIds } })
+          .toArray();
+
+        res.send({ success: true, data: boughtArtworks });
+      } catch (error) {
+        console.error("Bought Artworks Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch bought artworks" });
+      }
+    });
+
+    // ইউজারের সাবস্ক্রিপশন স্ট্যাটাস পাওয়ার জন্য
+    app.get("/api/user/subscription", async (req, res) => {
+      try {
+        const userId = req.query.userId;
+        if (!userId) {
+          return res
+            .status(400)
+            .send({ success: false, message: "User ID is required" });
+        }
+
+        const user = await usersCollection.findOne({ _id: new ObjectId(userId),});
+        if (!user) {
+          return res
+            .status(404)
+            .send({ success: false, message: "User not found" });
+        }
+
+
+        res.send({
+          success: true,
+          tier: user.subscriptionTier || "Free",
+          maxPurchases:
+            user.subscriptionTier === "Pro"
+              ? 9
+              : user.subscriptionTier === "Premium"
+                ? "Unlimited"
+                : 3,
+        });
+      } catch (error) {
+        console.error("Fetch Subscription Error:", error);
+        res
+          .status(500)
+          .send({
+            success: false,
+            message: "Failed to fetch subscription status",
+          });
       }
     });
 
