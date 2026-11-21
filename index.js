@@ -17,6 +17,7 @@ async function connectToMongoDB() {
     const db = client.db("arthub");
     const artworksCollection = db.collection("artworks");
     const ordersCollection = db.collection("seles");
+    const usersCollection = db.collection("user");
 
     app.get("/api/artworks", async (req, res) => {
       try {
@@ -266,19 +267,24 @@ async function connectToMongoDB() {
     app.get("/api/user/subscription", async (req, res) => {
       try {
         const userId = req.query.userId;
+        console.log("Searching for userId:", userId);
+
         if (!userId) {
           return res
             .status(400)
             .send({ success: false, message: "User ID is required" });
         }
 
-        const user = await usersCollection.findOne({ _id: new ObjectId(userId),});
+        // এখানে ObjectId-এ কনভার্ট করে কুয়েরি করা হলো
+        const user = await usersCollection.findOne({
+          _id: new ObjectId(userId),
+        });
+
         if (!user) {
           return res
             .status(404)
             .send({ success: false, message: "User not found" });
         }
-
 
         res.send({
           success: true,
@@ -292,15 +298,87 @@ async function connectToMongoDB() {
         });
       } catch (error) {
         console.error("Fetch Subscription Error:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Failed to fetch subscription status",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch subscription status",
+        });
       }
     });
 
+    // ২. সাবস্ক্রিপশন আপডেট করার API (PUT)
+    app.put("/api/user/subscription", async (req, res) => {
+      try {
+        const { userId, tier } = req.body;
+        console.log(
+          "Updating subscription for userId:",
+          userId,
+          "to tier:",
+          tier,
+        );
+
+        if (!userId || !tier) {
+          return res
+            .status(400)
+            .send({ success: false, message: "User ID and Tier are required" });
+        }
+
+        // এখানেও ObjectId দিয়ে আপডেট করা হচ্ছে
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(userId) },
+          {
+            $set: {
+              subscriptionTier: tier,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        res.send({
+          success: true,
+          message: `Successfully upgraded to ${tier} tier`,
+          data: result,
+        });
+      } catch (error) {
+        console.error("Update Subscription Error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update subscription",
+        });
+      }
+    });
+
+    app.put("/api/user/profile", async (req, res) => {
+      try {
+        const { userId, name } = req.body;
+
+        if (!userId || !name) {
+          return res
+            .status(400)
+            .send({ success: false, message: "User ID and Name are required" });
+        }
+
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(userId) },
+          {
+            $set: {
+              name: name,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        res.send({
+          success: true,
+          message: "Profile updated successfully",
+          data: result,
+        });
+      } catch (error) {
+        console.error("Update Profile Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to update profile" });
+      }
+    });
     console.log("You successfully connected to MongoDB!");
     return client;
   } catch (err) {
