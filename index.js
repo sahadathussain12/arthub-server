@@ -379,6 +379,111 @@ async function connectToMongoDB() {
           .send({ success: false, message: "Failed to update profile" });
       }
     });
+
+    // dashboard ar api
+    app.get("/api/admin/dashboard", async (req, res) => {
+      try {
+       
+        const [users, artworks, transactions] = await Promise.all([
+          usersCollection.find().toArray(),
+          artworksCollection.find().toArray(),
+         ordersCollection.find().sort({ _id: -1 }).toArray(),
+        ]);
+
+        // ১. স্ট্যাটাস বা কার্ডের হিসাব
+        const totalUsers = users.length;
+        const totalArtists = users.filter((u) => u.role === "artist").length;
+        const totalArtworksSold = transactions.length;
+        const totalRevenue = transactions.reduce(
+          (sum, item) => sum + (Number(item.price || item.amount) || 0),
+          0,
+        );
+
+        // ২. পাই চার্টের জন্য ক্যাটাগরি অনুযায়ী আর্টওয়ার্ক কাউন্ট
+        const categoryMap = {};
+        artworks.forEach((art) => {
+          const cat = art.category || "Digital Art";
+          categoryMap[cat] = (categoryMap[cat] || 0) + 1;
+        });
+        const categoryData = Object.keys(categoryMap).map((key) => ({
+          name: key,
+          value: categoryMap[key],
+        }));
+
+        // ৩. সেলস চার্টের জন্য সাম্প্রতিক বিক্রির ডেটা
+        const salesData = transactions
+          .slice(0, 7)
+          .reverse()
+          .map((t, idx) => ({
+            name: t.date
+              ? new Date(t.date).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                })
+              : `Sale ${idx + 1}`,
+            amount: Number(t.price || t.amount) || 0,
+          }));
+
+        res.send({
+          success: true,
+          stats: {
+            totalUsers,
+            totalArtists,
+            totalArtworksSold,
+            totalRevenue: totalRevenue.toFixed(2),
+          },
+          users,
+          artworks,
+          transactions,
+          charts: { categoryData, salesData },
+        });
+      } catch (error) {
+        console.error("Admin Dashboard API Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to load admin dashboard" });
+      }
+    });
+
+    // ইউজারের রোল আপডেট করার API (user / artist / admin)
+    app.put("/api/admin/users/role", async (req, res) => {
+      try {
+        const { userId, role } = req.body;
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(userId) },
+          { $set: { role: role, updatedAt: new Date() } },
+        );
+        res.send({
+          success: true,
+          message: `Role updated to ${role}`,
+          data: result,
+        });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to update role" });
+      }
+    });
+
+    // আর্টওয়ার্ক ডিলিট করার API
+    app.delete("/api/admin/artworks/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await artworksCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send({
+          success: true,
+          message: "Artwork deleted successfully",
+          data: result,
+        });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to delete artwork" });
+      }
+    });
+
     console.log("You successfully connected to MongoDB!");
     return client;
   } catch (err) {
