@@ -383,11 +383,11 @@ async function connectToMongoDB() {
     // dashboard ar api
     app.get("/api/admin/dashboard", async (req, res) => {
       try {
-       
+        // আপনার ডিফাইন করা কালেকশন নামগুলো এখানে ব্যবহার করা হলো
         const [users, artworks, transactions] = await Promise.all([
           usersCollection.find().toArray(),
           artworksCollection.find().toArray(),
-         ordersCollection.find().sort({ _id: -1 }).toArray(),
+          ordersCollection.find().sort({ _id: -1 }).toArray(),
         ]);
 
         // ১. স্ট্যাটাস বা কার্ডের হিসাব
@@ -407,6 +407,7 @@ async function connectToMongoDB() {
         });
         const categoryData = Object.keys(categoryMap).map((key) => ({
           name: key,
+
           value: categoryMap[key],
         }));
 
@@ -444,8 +445,7 @@ async function connectToMongoDB() {
           .send({ success: false, message: "Failed to load admin dashboard" });
       }
     });
-
-    // ইউজারের রোল আপডেট করার API (user / artist / admin)
+    // // ইউজারের রোল আপডেট করার API (user / artist / admin)
     app.put("/api/admin/users/role", async (req, res) => {
       try {
         const { userId, role } = req.body;
@@ -484,6 +484,7 @@ async function connectToMongoDB() {
       }
     });
 
+    
     console.log("You successfully connected to MongoDB!");
     return client;
   } catch (err) {
