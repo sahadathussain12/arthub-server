@@ -449,7 +449,7 @@ async function connectToMongoDB() {
     app.put("/api/admin/users/role", async (req, res) => {
       try {
         const { userId, role } = req.body;
-        const result = await userCollection.updateOne(
+        const result = await usersCollection.updateOne(
           { _id: new ObjectId(userId) },
           { $set: { role: role, updatedAt: new Date() } },
         );
@@ -483,6 +483,21 @@ async function connectToMongoDB() {
           .send({ success: false, message: "Failed to delete artwork" });
       }
     });
+
+    // ১. Home Page-এর জন্য শুধু ৬টি আর্টওয়ার্ক
+app.get("/api/home-data", async (req, res) => {
+  try {
+    const featuredArtworks = await artworksCollection
+      .find()
+      .sort({ _id: -1 })
+      .limit(6) // এখানে ৬টি লিমিট দেওয়া আছে
+      .toArray();
+
+    res.send({ success: true, featuredArtworks });
+  } catch (error) {
+    res.status(500).send({ success: false, message: "Failed to load home data" });
+  }
+});
 
     
     console.log("You successfully connected to MongoDB!");
