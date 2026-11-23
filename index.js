@@ -501,25 +501,37 @@ async function connectToMongoDB() {
       }
     });
 
-    app.get("/api/all/artworks", async (req, res) => {
-      try {
-        const artworks = await artworksCollection
-          .find()
-          .sort({ _id: -1 })
-          .toArray();
+   app.get("/api/all/artworks", async (req, res) => {
+  try {
+    const { search, category } = req.query;
+    let query = {}; 
 
-        res.send({
-          success: true,
-          artworks,
-        });
-      } catch (error) {
-        console.error("Get Artworks Error:", error);
-        res.status(500).send({
-          success: false,
-          message: "Failed to fetch artworks",
-        });
-      }
+    // সার্চ বা ক্যাটাগরি থাকলে কুয়েরিতে শর্ত যোগ হবে
+    if (search) {
+      query.title = { $regex: search, $options: "i" };
+    }
+    if (category && category !== "All") {
+      query.category = { $regex: `^${category}$`, $options: "i" };
+    }
+
+    // এখন এই query দিয়ে ডাটাবেস থেকে ফিল্টার করে ডাটা আনা হবে
+    const artworks = await artworksCollection
+      .find(query)
+      .sort({ _id: -1 })
+      .toArray();
+
+    res.send({
+      success: true,
+      artworks,
     });
+  } catch (error) {
+    console.error("Get Artworks Error:", error);
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch artworks",
+    });
+  }
+});
 
     console.log("You successfully connected to MongoDB!");
     return client;
