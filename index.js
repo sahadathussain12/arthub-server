@@ -501,37 +501,72 @@ async function connectToMongoDB() {
       }
     });
 
-   app.get("/api/all/artworks", async (req, res) => {
-  try {
-    const { search, category } = req.query;
-    let query = {}; 
+    app.get("/api/all/artworks", async (req, res) => {
+      try {
+        const { search, category } = req.query;
+        let query = {};
 
-    // সার্চ বা ক্যাটাগরি থাকলে কুয়েরিতে শর্ত যোগ হবে
-    if (search) {
-      query.title = { $regex: search, $options: "i" };
-    }
-    if (category && category !== "All") {
-      query.category = { $regex: `^${category}$`, $options: "i" };
-    }
+        // সার্চ বা ক্যাটাগরি থাকলে কুয়েরিতে শর্ত যোগ হবে
+        if (search) {
+          query.title = { $regex: search, $options: "i" };
+        }
+        if (category && category !== "All") {
+          query.category = { $regex: `^${category}$`, $options: "i" };
+        }
 
-    // এখন এই query দিয়ে ডাটাবেস থেকে ফিল্টার করে ডাটা আনা হবে
-    const artworks = await artworksCollection
-      .find(query)
-      .sort({ _id: -1 })
-      .toArray();
+        // এখন এই query দিয়ে ডাটাবেস থেকে ফিল্টার করে ডাটা আনা হবে
+        const artworks = await artworksCollection
+          .find(query)
+          .sort({ _id: -1 })
+          .toArray();
 
-    res.send({
-      success: true,
-      artworks,
+        res.send({
+          success: true,
+          artworks,
+        });
+      } catch (error) {
+        console.error("Get Artworks Error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch artworks",
+        });
+      }
     });
-  } catch (error) {
-    console.error("Get Artworks Error:", error);
-    res.status(500).send({
-      success: false,
-      message: "Failed to fetch artworks",
+
+    app.get("/api/all/artworks/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        // আইডি ভ্যালিড কি না চেক করা
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid artwork ID",
+          });
+        }
+
+        const query = { _id: new ObjectId(id) };
+        const artwork = await artworksCollection.findOne(query);
+
+        if (!artwork) {
+          return res.status(404).send({
+            success: false,
+            message: "Artwork not found",
+          });
+        }
+
+        res.send({
+          success: true,
+          artwork,
+        });
+      } catch (error) {
+        console.error("Get Single Artwork Error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch artwork details",
+        });
+      }
     });
-  }
-});
 
     console.log("You successfully connected to MongoDB!");
     return client;
