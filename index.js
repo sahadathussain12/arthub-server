@@ -11,6 +11,53 @@ app.use(express.json());
 
 const client = new MongoClient(process.env.MONGO_URI);
 
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
+
+// আপনার Next.js বা Auth সার্ভারের JWKS URL (পোর্ট বা ডোমেইন প্রয়োজনমতো পরিবর্তন করে নিতে পারেন)
+const JWKS = createRemoteJWKSet(
+  new URL(
+    process.env.BETTER_AUTH_URL
+      ? `${process.env.BETTER_AUTH_URL}/api/auth/jwks`
+      : "http://localhost:3000/api/auth/jwks",
+  ),
+);
+
+const verifyToken = async (req, res, next) => {
+  try {
+    const authHeader = req?.headers?.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized access! No token provided.",
+      });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized access! Invalid token format.",
+      });
+    }
+    const { payload } = await jwtVerify(token, JWKS);
+
+    req.user = payload;
+
+    next();
+  } catch (error) {
+    console.error("Token verification error:", error.message);
+
+    return res.status(403).json({
+      success: false,
+      message: "Forbidden! Invalid or expired token.",
+    });
+  }
+};
+
+module.exports = verifyToken;
+
 async function connectToMongoDB() {
   try {
     await client.connect();
@@ -18,8 +65,9 @@ async function connectToMongoDB() {
     const artworksCollection = db.collection("artworks");
     const ordersCollection = db.collection("seles");
     const usersCollection = db.collection("user");
+    const reviewsCollection = db.collection("reviews");
 
-    app.get("/api/artworks", async (req, res) => {
+    app.get("/api/artworks", verifyToken, async (req, res) => {
       try {
         const { artistId } = req.query;
 
@@ -49,7 +97,7 @@ async function connectToMongoDB() {
       }
     });
 
-    app.post("/api/artworks", async (req, res) => {
+    app.post("/api/artworks", verifyToken, async (req, res) => {
       try {
         // console.log("Artwork API Hit!");
 
@@ -78,7 +126,7 @@ async function connectToMongoDB() {
     });
 
     // নির্দিষ্ট একটি আর্টওয়ার্কের ডাটা পাওয়ার API
-    app.get("/api/artworks/:id", async (req, res) => {
+    app.get("/api/artworks/:id", verifyToken, async (req, res) => {
       try {
         const id = req.params.id;
 
@@ -101,7 +149,7 @@ async function connectToMongoDB() {
       }
     });
 
-    app.patch("/api/artworks/:id", async (req, res) => {
+    app.patch("/api/artworks/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const updatedData = req.body;
@@ -160,14 +208,26 @@ async function connectToMongoDB() {
     app.delete("/api/artworks/:id", async (req, res) => {
       try {
         const id = req.params.id;
-        const query = { _id: new ObjectId(id) };
-        const result = await artworksCollection.deleteOne(query);
 
-        if (result.deletedCount === 0) {
+        // ১. আইডি সঠিক ফরম্যাটে আছে কি না চেক
+        if (!ObjectId.isValid(id)) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Invalid artwork ID format" });
+        }
+
+        const query = { _id: new ObjectId(id) };
+
+        // (ঐচ্ছিক) চাইলে ডিলিট করার আগে চেক করতে পারেন আর্টওয়ার্কটি ডাটাবেজে আছে কি না
+        const artwork = await artworksCollection.findOne(query);
+        if (!artwork) {
           return res
             .status(404)
             .send({ success: false, message: "Artwork not found" });
         }
+
+        // ২. ডিলিট অপারেশন রান করা
+        const result = await artworksCollection.deleteOne(query);
 
         res.send({
           success: true,
@@ -536,8 +596,6 @@ async function connectToMongoDB() {
     app.get("/api/all/artworks/:id", async (req, res) => {
       try {
         const id = req.params.id;
-
-        // আইডি ভ্যালিড কি না চেক করা
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({
             success: false,
@@ -565,6 +623,62 @@ async function connectToMongoDB() {
           success: false,
           message: "Failed to fetch artwork details",
         });
+      }
+    });
+    // ==========================================
+    // 1. কোনো নির্দিষ্ট আর্টওয়ার্কের সব কমেন্ট/রিভিউ ফেচ করা (GET)
+    // ==========================================
+    // সব রিভিউ আনা
+    app.get("/api/artworks/:id/reviews", async (req, res) => {
+      try {
+        const artworkId = req.params.id;
+        const reviews = await reviewsCollection
+          .find({ artworkId })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send({ success: true, data: reviews });
+      } catch (error) {
+        console.error("Get Reviews Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch reviews" });
+      }
+    });
+
+    // নতুন রিভিউ যোগ করা
+    app.post("/api/artworks/:id/reviews", async (req, res) => {
+      try {
+        const artworkId = req.params.id;
+        const { userName, userImage, rating, comment } = req.body;
+
+        if (!comment || !comment.trim()) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Comment text is required" });
+        }
+
+        const newReview = {
+          artworkId,
+          userName: userName || "Anonymous User",
+          userImage: userImage || null,
+          rating: Math.min(5, Math.max(1, Number(rating) || 5)),
+          comment: comment.trim(),
+          createdAt: new Date(),
+        };
+
+        const result = await reviewsCollection.insertOne(newReview);
+
+        res.status(201).send({
+          success: true,
+          message: "Review added successfully",
+          review: { ...newReview, _id: result.insertedId },
+        });
+      } catch (error) {
+        console.error("Add Review Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to add review" });
       }
     });
 
