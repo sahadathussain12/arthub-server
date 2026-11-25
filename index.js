@@ -3,6 +3,9 @@ const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
 require("dotenv").config();
 
+const Stripe = require("stripe");
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -681,6 +684,46 @@ async function connectToMongoDB() {
           .send({ success: false, message: "Failed to add review" });
       }
     });
+
+app.post("/api/verify-payment", async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId) {
+      return res.status(400).send({ success: false, message: "Session ID is required" });
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    if (session.payment_status !== "paid") {
+      return res.status(400).send({ success: false, message: "Payment not completed" });
+    }
+
+    const existingOrder = await ordersCollection.findOne({ transactionId: session.id });
+    if (existingOrder) {
+      return res.send({ success: true, message: "Order already recorded", order: existingOrder });
+    }
+
+    const { artworkId, userId, artistId } = session.metadata;
+    const artwork = await artworksCollection.findOne({ _id: new ObjectId(artworkId) });
+
+    const newOrder = {
+      artworkId,
+      artworkTitle: artwork?.title || "Artwork",
+      artworkImage: artwork?.image || "",
+      userId,
+      artistId,
+      price: session.amount_total / 100,
+      transactionId: session.id,
+      status: "paid",
+      createdAt: new Date(),
+    };
+
+    await ordersCollection.insertOne(newOrder);
+    res.send({ success: true, message: "Payment verified and order saved!", order: newOrder });
+  } catch (error) {
+    console.error("Verify Payment Error:", error);
+    res.status(500).send({ success: false, message: "Payment verification failed" });
+  }
+});
 
     console.log("You successfully connected to MongoDB!");
     return client;
