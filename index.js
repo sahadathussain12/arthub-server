@@ -248,11 +248,16 @@ async function connectToMongoDB() {
     app.get("/api/sales", async (req, res) => {
       try {
         const artistId = req.query.artistId;
+        console.log("Frontend theke asha artistId:", artistId); // 👈 এটি টার্মিনালে দেখুন
+
         if (!artistId) {
           return res
             .status(400)
             .send({ success: false, message: "Artist ID is required" });
         }
+
+        // ডাটাবেজে সব অর্ডার কী অবস্থায় আছে তা দেখতে এটিও লগ করতে পারেন
+        const allOrders = await ordersCollection.find({}).toArray();
 
         const sales = await ordersCollection
           .find({ artistId: artistId })
@@ -628,10 +633,7 @@ async function connectToMongoDB() {
         });
       }
     });
-    // ==========================================
-    // 1. কোনো নির্দিষ্ট আর্টওয়ার্কের সব কমেন্ট/রিভিউ ফেচ করা (GET)
-    // ==========================================
-    // সব রিভিউ আনা
+
     app.get("/api/artworks/:id/reviews", async (req, res) => {
       try {
         const artworkId = req.params.id;
@@ -685,45 +687,105 @@ async function connectToMongoDB() {
       }
     });
 
-app.post("/api/verify-payment", async (req, res) => {
-  try {
-    const { sessionId } = req.body;
-    if (!sessionId) {
-      return res.status(400).send({ success: false, message: "Session ID is required" });
-    }
+    app.post("/api/verify-payment", async (req, res) => {
+      try {
+        const { sessionId } = req.body;
+        if (!sessionId) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Session ID is required" });
+        }
 
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-    if (session.payment_status !== "paid") {
-      return res.status(400).send({ success: false, message: "Payment not completed" });
-    }
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        if (session.payment_status !== "paid") {
+          return res
+            .status(400)
+            .send({ success: false, message: "Payment not completed" });
+        }
 
-    const existingOrder = await ordersCollection.findOne({ transactionId: session.id });
-    if (existingOrder) {
-      return res.send({ success: true, message: "Order already recorded", order: existingOrder });
-    }
+        const existingOrder = await ordersCollection.findOne({
+          transactionId: session.id,
+        });
+        if (existingOrder) {
+          return res.send({
+            success: true,
+            message: "Order already recorded",
+            order: existingOrder,
+          });
+        }
 
-    const { artworkId, userId, artistId } = session.metadata;
-    const artwork = await artworksCollection.findOne({ _id: new ObjectId(artworkId) });
+        const { artworkId, userId, artistId } = session.metadata;
+        const artwork = await artworksCollection.findOne({
+          _id: new ObjectId(artworkId),
+        });
 
-    const newOrder = {
-      artworkId,
-      artworkTitle: artwork?.title || "Artwork",
-      artworkImage: artwork?.image || "",
-      userId,
-      artistId,
-      price: session.amount_total / 100,
-      transactionId: session.id,
-      status: "paid",
-      createdAt: new Date(),
-    };
+        const newOrder = {
+          artworkId,
+          artworkTitle: artwork?.title || "Artwork",
+          artworkImage: artwork?.image || "",
+          userId,
+          artistId,
+          price: session.amount_total / 100,
+          transactionId: session.id,
+          status: "paid",
+          createdAt: new Date(),
+        };
 
-    await ordersCollection.insertOne(newOrder);
-    res.send({ success: true, message: "Payment verified and order saved!", order: newOrder });
-  } catch (error) {
-    console.error("Verify Payment Error:", error);
-    res.status(500).send({ success: false, message: "Payment verification failed" });
-  }
-});
+        await ordersCollection.insertOne(newOrder);
+        res.send({
+          success: true,
+          message: "Payment verified and order saved!",
+          order: newOrder,
+        });
+      } catch (error) {
+        console.error("Verify Payment Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Payment verification failed" });
+      }
+    });
+
+    app.get("/api/top-artists", async (req, res) => {
+      try {
+        const topArtistsData = await ordersCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$artistId",
+                totalSales: { $sum: 1 },
+                totalRevenue: { $sum: "$price" },
+              },
+            },
+            { $sort: { totalSales: -1 } },
+            { $limit: 3 }, 
+          ])
+          .toArray();
+        const artistIds = topArtistsData.map((item) => new ObjectId(item._id));
+        const artistsInfo = await usersCollection
+          .find({ _id: { $in: artistIds } })
+          .toArray();
+        const result = topArtistsData.map((stat) => {
+          const artist = artistsInfo.find((u) => u._id.toString() === stat._id);
+          return {
+            artistId: stat._id,
+            name: artist?.name || artist?.username || "Featured Artist",
+            avatar:
+              artist?.image ||
+              artist?.photoURL ||
+              "https://i.ibb.co/5G02kwv/default-avatar.png",
+            totalSales: stat.totalSales,
+            totalRevenue: stat.totalRevenue,
+          };
+        });
+
+        res.send({ success: true, data: result });
+      } catch (error) {
+        console.error("Top Artists Error:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch top artists" });
+      }
+    });
 
     console.log("You successfully connected to MongoDB!");
     return client;
