@@ -63,6 +63,57 @@ async function connectToMongoDB() {
     const usersCollection = db.collection("user");
     const reviewsCollection = db.collection("reviews");
 
+
+    // ======================================
+// ADMIN AUTHENTICATION MIDDLEWARE
+// ======================================
+
+const verifyAdmin = async (req, res, next) => {
+  try {
+    // প্রথমে JWT verify হবে
+    const email = req.user?.email;
+    const tokenUserId = req.user?.sub || req.user?.id;
+
+    let adminUser = null;
+
+    // Email দিয়ে user খোঁজা
+    if (email) {
+      adminUser = await usersCollection.findOne({ email });
+    }
+
+    // Email না থাকলে ID দিয়ে খোঁজা
+    if (!adminUser && tokenUserId && ObjectId.isValid(tokenUserId)) {
+      adminUser = await usersCollection.findOne({
+        _id: new ObjectId(tokenUserId),
+      });
+    }
+
+    if (!adminUser) {
+      return res.status(401).json({
+        success: false,
+        message: "User account not found",
+      });
+    }
+
+    if (adminUser.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied! Admin permission required.",
+      });
+    }
+
+    req.admin = adminUser;
+    next();
+  } catch (error) {
+    console.error("Admin verification error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Admin verification failed",
+    });
+  }
+};
+
     app.get("/api/artworks", verifyToken, async (req, res) => {
       try {
         const { artistId } = req.query;
@@ -201,7 +252,7 @@ async function connectToMongoDB() {
       }
     });
 
-    // কমা (,) যুক্ত করা হয়েছে: verifyToken, async
+
     app.delete("/api/artworks/:id", verifyToken, async (req, res) => {
       try {
         const id = req.params.id;
@@ -236,7 +287,7 @@ async function connectToMongoDB() {
       }
     });
 
-    app.get("/api/sales", async (req, res) => {
+    app.get("/api/sales",  async (req, res) => {
       try {
         const artistId = req.query.artistId;
         console.log("Frontend theke asha artistId:", artistId); // 👈 এটি টার্মিনালে দেখুন
@@ -263,7 +314,7 @@ async function connectToMongoDB() {
       }
     });
 
-    app.get("/api/orders", async (req, res) => {
+    app.get("/api/orders",verifyToken, async (req, res) => {
       try {
         const userId = req.query.userId;
         if (!userId) {
@@ -288,7 +339,7 @@ async function connectToMongoDB() {
       }
     });
 
-    app.get("/api/user/bought-artworks", async (req, res) => {
+    app.get("/api/user/bought-artworks",verifyToken, async (req, res) => {
       try {
         const userId = req.query.userId;
         if (!userId) {
@@ -323,7 +374,7 @@ async function connectToMongoDB() {
     });
 
     // ইউজারের সাবস্ক্রিপশন স্ট্যাটাস পাওয়ার জন্য
-    app.get("/api/user/subscription", async (req, res) => {
+    app.get("/api/user/subscription",verifyToken, async (req, res) => {
       try {
         const userId = req.query.userId;
         console.log("Searching for userId:", userId);
@@ -365,7 +416,7 @@ async function connectToMongoDB() {
     });
 
     // ২. সাবস্ক্রিপশন আপডেট করার API (PUT)
-    app.put("/api/user/subscription", async (req, res) => {
+    app.put("/api/user/subscription", verifyToken, async (req, res) => {
       try {
         const { userId, tier } = req.body;
         console.log(
@@ -406,7 +457,7 @@ async function connectToMongoDB() {
       }
     });
 
-    app.put("/api/user/profile", async (req, res) => {
+    app.put("/api/user/profile", verifyToken, async (req, res) => {
       try {
         const { userId, name } = req.body;
 
@@ -441,66 +492,383 @@ async function connectToMongoDB() {
 
     // dashboard ar api
 
-    app.get("/api/admin/dashboard", verifyToken, async (req, res) => {
-      try {
-        const email = req.user?.email;
-        const user = await usersCollection.findOne({ email });
+  
+// ======================================
+// ADMIN DASHBOARD API
+// ======================================
 
-        // 🔴 এই জায়গাটি এভাবে .json() দিয়ে দেবেন, যাতে ফ্রন্টএন্ডে HTML এরর না আসে
-        if (!user || user.role !== "admin") {
-          return res.status(403).json({
-            success: false,
-            message: "Forbidden! You do not have admin access.",
-          });
-        }
 
-        // এডমিন হলে বাকি ডাটা পাঠাবে...
-        res.json({ success: true, stats: {} });
-      } catch (error) {
-        res.status(500).json({
+app.get("/api/admin/dashboard",verifyToken,verifyAdmin,
+  async (req, res) => {
+    try {
+      // Total users
+      const totalUsers = await usersCollection.countDocuments({
+        role: "user",
+      });
+
+      // Total artists
+      const totalArtists = await usersCollection.countDocuments({
+        role: "artist",
+      });
+
+      // Total artworks
+      const totalArtworks = await artworksCollection.countDocuments();
+
+      // Total artworks sold
+      const totalArtworksSold = await ordersCollection.countDocuments({
+        status: "paid",
+      });
+
+      // Total revenue
+      const revenueResult = await ordersCollection
+        .aggregate([
+          {
+            $match: {
+              status: "paid",
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              totalRevenue: {
+                $sum: "$price",
+              },
+            },
+          },
+        ])
+        .toArray();
+
+      const totalRevenue = revenueResult[0]?.totalRevenue || 0;
+
+      // All users
+      const users = await usersCollection
+        .find({})
+        .project({
+          password: 0,
+          hashedPassword: 0,
+        })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .toArray();
+
+      // All artworks
+      const artworks = await artworksCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .toArray();
+
+      // All transactions
+      const transactions = await ordersCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .toArray();
+
+      // Sales chart
+      const salesChart = await ordersCollection
+        .aggregate([
+          {
+            $match: {
+              status: "paid",
+              createdAt: {
+                $type: "date",
+              },
+            },
+          },
+          {
+            $group: {
+              _id: {
+                $dateToString: {
+                  format: "%Y-%m-%d",
+                  date: "$createdAt",
+                },
+              },
+              sales: {
+                $sum: 1,
+              },
+              revenue: {
+                $sum: "$price",
+              },
+            },
+          },
+          {
+            $sort: {
+              _id: 1,
+            },
+          },
+          {
+            $limit: 30,
+          },
+        ])
+        .toArray();
+
+      // Category chart
+      const categoryChart = await artworksCollection
+        .aggregate([
+          {
+            $group: {
+              _id: "$category",
+              total: {
+                $sum: 1,
+              },
+            },
+          },
+          {
+            $sort: {
+              total: -1,
+            },
+          },
+        ])
+        .toArray();
+
+      // Send response
+      res.status(200).json({
+        success: true,
+
+        stats: {
+          totalUsers,
+          totalArtists,
+          totalArtworks,
+          totalArtworksSold,
+          totalRevenue,
+        },
+
+        users,
+        artworks,
+        transactions,
+
+        charts: {
+          // Sales Trend Chart
+          sales: salesChart.map((item) => ({
+            name: item._id,
+            amount: item.revenue || 0,
+          })),
+
+          // Artworks by Category Chart
+          categories: categoryChart.map((item) => ({
+            name: item._id || "Uncategorized",
+            value: item.total || 0,
+          })),
+        },
+      });
+    } catch (error) {
+      console.error("Admin Dashboard Error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to load admin dashboard",
+        error: error.message,
+      });
+    }
+  }
+);
+
+
+// ======================================
+// ADMIN: MANAGE USERS
+// ======================================
+
+app.get( "/api/admin/users",verifyToken,verifyAdmin,
+  async (req, res) => {
+    try {
+      const users = await usersCollection
+        .find({})
+        .project({
+          password: 0,
+          hashedPassword: 0,
+        })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      res.json({
+        success: true,
+        data: users,
+      });
+    } catch (error) {
+      console.error("Admin Users Error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch users",
+      });
+    }
+  },
+);
+
+// ======================================
+// ADMIN: UPDATE USER ROLE
+// ======================================
+
+app.put(
+  "/api/admin/users/role",
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { userId, role } = req.body;
+
+      const allowedRoles = ["user", "artist", "admin"];
+
+      if (!userId || !ObjectId.isValid(userId)) {
+        return res.status(400).json({
           success: false,
-          message: "Internal server error",
+          message: "Invalid user ID",
         });
       }
-    });
-    // // ইউজারের রোল আপডেট করার API (user / artist / admin)
-    app.put("/api/admin/users/role", verifyToken, async (req, res) => {
-      try {
-        const { userId, role } = req.body;
-        const result = await usersCollection.updateOne(
-          { _id: new ObjectId(userId) },
-          { $set: { role: role, updatedAt: new Date() } },
-        );
-        res.send({
-          success: true,
-          message: `Role updated to ${role}`,
-          data: result,
-        });
-      } catch (error) {
-        res
-          .status(500)
-          .send({ success: false, message: "Failed to update role" });
-      }
-    });
 
-    // আর্টওয়ার্ক ডিলিট করার API
-    app.delete("/api/admin/artworks/:id", verifyToken, async (req, res) => {
-      try {
-        const id = req.params.id;
-        const result = await artworksCollection.deleteOne({
-          _id: new ObjectId(id),
+      if (!allowedRoles.includes(role)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid role",
         });
-        res.send({
-          success: true,
-          message: "Artwork deleted successfully",
-          data: result,
-        });
-      } catch (error) {
-        res
-          .status(500)
-          .send({ success: false, message: "Failed to delete artwork" });
       }
-    });
+
+      // Prevent accidental self-demotion
+      if (req.admin._id.toString() === userId && role !== "admin") {
+        return res.status(400).json({
+          success: false,
+          message: "You cannot remove your own admin role",
+        });
+      }
+
+      const result = await usersCollection.updateOne(
+        { _id: new ObjectId(userId) },
+        {
+          $set: {
+            role,
+            updatedAt: new Date(),
+          },
+        },
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `User role updated to ${role}`,
+      });
+    } catch (error) {
+      console.error("Update Role Error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to update user role",
+      });
+    }
+  },
+);
+
+// ======================================
+// ADMIN: MANAGE ALL ARTWORKS
+// ======================================
+
+app.get(
+  "/api/admin/artworks",
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const artworks = await artworksCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      res.json({
+        success: true,
+        data: artworks,
+      });
+    } catch (error) {
+      console.error("Admin Artworks Error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch artworks",
+      });
+    }
+  },
+);
+
+// ======================================
+// ADMIN: DELETE ARTWORK
+// ======================================
+
+app.delete(
+  "/api/admin/artworks/:id",
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid artwork ID",
+        });
+      }
+
+      const result = await artworksCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+
+      if (result.deletedCount === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Artwork not found",
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Artwork deleted successfully",
+      });
+    } catch (error) {
+      console.error("Admin Delete Artwork Error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to delete artwork",
+      });
+    }
+  },
+);
+
+// ======================================
+// ADMIN: ALL TRANSACTIONS
+// ======================================
+
+app.get(
+  "/api/admin/transactions",
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const transactions = await ordersCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      res.json({
+        success: true,
+        data: transactions,
+      });
+    } catch (error) {
+      console.error("Admin Transactions Error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch transactions",
+      });
+    }
+  },
+);
+
 
     // ১. Home Page-এর জন্য শুধু ৬টি আর্টওয়ার্ক
     app.get("/api/home-data", async (req, res) => {
@@ -602,7 +970,7 @@ async function connectToMongoDB() {
     });
 
     // নতুন রিভিউ যোগ করা
-    app.post("/api/artworks/:id/reviews", async (req, res) => {
+    app.post("/api/artworks/:id/reviews",verifyToken, async (req, res) => {
       try {
         const artworkId = req.params.id;
         const { userName, userImage, rating, comment } = req.body;
